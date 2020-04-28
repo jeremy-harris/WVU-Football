@@ -1,0 +1,197 @@
+---
+title: "WVU Football - 2019 vTexas"
+author: "Jeremy Harris"
+date: "April 28, 2020"
+output:
+  pdf_document: default
+  html_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+#WVU Football Analysis
+I'm creating this analysis as a pipeline to view WVU Football information. I have started with just a single game here and the data is limited. I plan to expand this into a Shiny App so a user can select the year and game that they are interested in and have the results automatically appear.
+
+In addition, I plan to compile multiple years for a head coach and try to gain further insight into tendencies related to the game current game situation. This is just a starting point and will be built upon further. 
+
+
+##The Data
+I'm using this website: https://collegefootballdata.com to gather data for all plays that took place during the game. They have an API located here: https://api.collegefootballdata.com/api/docs/?url=/api-docs.json#/plays/getPlays that I am using to pull the data directly into my file. 
+
+
+```{r, include = FALSE}
+#load libraries
+library(dplyr)
+library(jsonlite)
+library(tidyverse)
+
+#get data from API 
+data_in <- fromJSON("https://api.collegefootballdata.com/plays?seasonType=regular&year=2019&week=6&team=West%20Virginia")
+
+#set variables for team that WVU is playing -- Week 6 is vs TEXAS
+opp <- "Texas"
+opp_score <- "score_TEX"
+```
+
+
+##Clean Up Data
+I take the data and drop fields that aren't needed, and rearrange the data into an order that makes sense - then I sort by period then minutes then seconds. Most of my code I dropped from the pdf printout but it available on my github page (http://github.com/jeremy-harris). I left this here to show some of what is taking place behind the scenes. 
+
+```{r}
+#convert score to be associated with team, not offense/defense
+data_in <- data_in %>%
+  mutate(score_WVU = ifelse(offense == "West Virginia", offense_score, defense_score), 
+         opp_score = ifelse(offense == opp, offense_score, defense_score)) %>%
+  mutate(clock.minutes = clock[[1]], clock.seconds = clock[[2]])
+
+#group by period, then minute, then second
+data_in <- data_in %>%
+  select(-drive_id, -offense_score, -defense_score, -yards_to_goal, -offense_conference, -id,
+         -clock, -defense_conference, -defense, -ppa) %>%
+  select(score_WVU, opp_score, period, clock.minutes,
+         clock.seconds, offense, yard_line, down, distance, yards_gained, play_type, play_text) %>%
+  arrange(period, -clock.minutes)
+
+```
+
+##Visualize The Data
+I create a few different plots here to show things that might be interesting. I don't have tons of granular detail like formations, blitzing, injuries, etc. - but I can show basic game stats which is what I try to do here. 
+
+```{r, include = FALSE}
+library(ggplot2)
+library(gridExtra)
+
+#Let's show play type by yards to go for each team
+distance_data <- data_in %>%
+  mutate(play = ifelse(str_detect(string=play_type, pattern="Rush"), "Rush",
+                       ifelse(str_detect(string=play_type, pattern = "Pass*"), "Pass", "Other"))) %>%
+  filter(play_type != "End of Half" & play_type != "End Period" & play_type != "Kickoff" &
+           play_type != "Field Goal Good" & play_type != "Field Goal Missed" &
+           play_type != "Penalty" & play_type != "Punt" & play_type != "Timeout" &
+           play_type != "Sack")
+
+gg_yards_wvu <- distance_data %>% filter(offense == "West Virginia") %>%
+  ggplot(aes(distance)) +
+  geom_density(aes(fill = factor(play)), alpha = 0.6) +
+  labs(title = "Density Plot of Pass/Rush by Distance to Go for First Down",
+       subtitle="West Virginia",
+       x="Distance to Get First Down/Score",
+       fill="Play Type") + 
+  scale_fill_manual(values = c("#FFFF33", "#000072"))
+
+gg_yards_opp <- distance_data %>% filter(offense == opp) %>%
+  ggplot(aes(distance)) +
+  geom_density(aes(fill = factor(play)), alpha = 0.6) +
+  labs(title = "Density Plot of Pass/Rush by Distance to Go for First Down",
+       subtitle=opp,
+       x="Distance to Get First Down/Score",
+       fill="Play Type")
+```
+
+```{r, echo = FALSE}
+plot_yards_wvu <- gg_yards_wvu + theme(plot.margin = unit(c(1,1,0,2), "lines"))
+plot_yards_opp <- gg_yards_opp + theme(plot.margin = unit(c(2,1,1,1), "lines"))
+grid.arrange(plot_yards_wvu, plot_yards_opp)
+```
+
+This next plot shows the type of play by down per team. 
+
+```{r, include = FALSE}
+#Let's show play type down for each team
+down_data <- data_in %>%
+  mutate(play = ifelse(str_detect(string=play_type, pattern="Rush"), "Rush",
+                       ifelse(str_detect(string=play_type, pattern = "Pass*"), "Pass", "Other"))) %>%
+  filter(play_type != "End of Half" & play_type != "End Period" & play_type != "Kickoff" &
+           play_type != "Field Goal Good" & play_type != "Field Goal Missed" &
+           play_type != "Penalty" & play_type != "Punt" & play_type != "Timeout" &
+           play_type != "Sack") %>%
+  count(down, offense, play)
+
+gg_down <- down_data %>%
+  ggplot(aes(x = down, y = n, fill = play)) + 
+  geom_bar(stat = "identity") + 
+  facet_wrap( ~ offense) +
+  labs(title = "Pass/Rush by Down per Team",
+       subtitle=opp,
+       x="Down",
+       y = "Number of Plays",
+       fill="Play Type") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_manual(values = c("#FFFF33", "#000072"))
+```
+```{r, echo = FALSE}
+gg_down  
+```
+
+
+##Statistical Analysis
+I want to take a look at the probability of a given play type using all variables. As this is a single game, there isn't much data to use in this instance. However, a longer term project can compile data for an entire season (or coaches career, etc.) to show tenancies given the data in the dataset. Again, this can be combined with things like formation type of offense and defense to get an even better insight. 
+
+```{r, echo = FALSE}
+library(caret)
+#first, I need to create two variables to use for the model: "who's winning" & "by how much"
+#I also create a "run = true" showing that the play is a run play, I'll predict on this
+data_mod <- data_in %>%
+   mutate(play = ifelse(str_detect(string=play_type, pattern="Rush"), "Rush",
+                       ifelse(str_detect(string=play_type, pattern = "Pass*"), "Pass", "Other")), 
+         wvu_up = ifelse(score_WVU>opp_score, "1", "0"), 
+         amt_up = abs(score_WVU - opp_score)) %>%
+  filter(play != "Other") %>%
+  select(-play_type, -play_text)
+
+#create factors for appropriate variables
+cnames <- colnames(data_mod[c(3,4,5, 6, 8,11,12)])
+data_mod[cnames] <- lapply(data_mod[cnames], factor)
+
+
+#now I want to setup my dataset for modeling holding out only 10% of the data
+data_wvu <- data_mod %>%
+  filter(offense == "West Virginia") %>%
+  select(-offense)
+
+
+data_opp <- data_mod %>%
+  filter(offense == opp) %>%
+  select(-offense)
+
+#setup cross-validation with 10 folds as there are 681 observations in my data
+fitControl <- trainControl(method = "cv", number = 10)
+
+#setup test and train variables with 200 variables in the test dataset
+set.seed(333)
+training1 <- createDataPartition(data_wvu$play, p = .9)$Resample1
+train_data1 <- data_wvu[training1, ]
+test_data1 <- data_wvu[-training1, ]
+
+training2 <- createDataPartition(data_opp$play, p = .9)$Resample1
+train_data2 <- data_opp[training2, ]
+test_data2 <- data_opp[-training2, ]
+
+#model data with random forest and tree classification
+#Fit with Random Forest
+set.seed(333)
+fit.rf1 <- train(play ~., data = train_data1, method="rf", trControl = fitControl,
+                 family="binomial")
+set.seed(333)
+fit.rf2 <- train(play ~., data = train_data2, method="rf", trControl = fitControl,
+                 family="binomial")
+
+#prediction models with results compared to produce the best model (hold out set of 10% + 10 fold cv)
+#Predict with random forest
+pr.rf1 <- predict(fit.rf1, test_data1)
+pr.rf2 <- predict(fit.rf2, test_data2)
+```
+
+I've setup models (Random Forest & Class Trees) to predict both WVU and the opponent's play to be a Run or Pass. Let's compare our models and see how they perform.
+
+```{r, echo = FALSE}
+#Random Forest Confusion Matrix - WVU
+cat("\nRandom Forest - WVU\n")
+confusionMatrix(pr.rf1, test_data1$play)
+
+#Random Forest Confusion Matrix - opp
+cat("\nRandom Forest - opp\n")
+confusionMatrix(pr.rf2, test_data2$play)
+```
+
+From my limited data, I was able to show a 66% accuracy predicting the play type when WVU had the ball and a 71% accuracy predicting the play type when the opponent had the ball. 

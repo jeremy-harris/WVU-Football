@@ -14,6 +14,8 @@ I'm creating this analysis as a pipeline to view WVU Football information. I hav
 
 In addition, I plan to compile multiple years for a head coach and try to gain further insight into tendencies related to the game current game situation. This is just a starting point and will be built upon further. 
 
+##Texas @ WVU - 2019
+The game I'm using to setup the model is week 6 of the 2019 season when Texas visited WVU. Once I get the analysis fully setup, this should work for any team that WVU played. 
 
 ##The Data
 I'm using this website: https://collegefootballdata.com to gather data for all plays that took place during the game. They have an API located here: https://api.collegefootballdata.com/api/docs/?url=/api-docs.json#/plays/getPlays that I am using to pull the data directly into my file. 
@@ -123,6 +125,7 @@ gg_down <- down_data %>%
 gg_down  
 ```
 
+So, clearly Texas favored the run and WVU favored the pass. Also, since punting and field goals have been removed from this graph - we can see that Texas didn't go for it on 4th down during this game. 
 
 ##Statistical Analysis
 I want to take a look at the probability of a given play type using all variables. As this is a single game, there isn't much data to use in this instance. However, a longer term project can compile data for an entire season (or coaches career, etc.) to show tenancies given the data in the dataset. Again, this can be combined with things like formation type of offense and defense to get an even better insight. 
@@ -194,4 +197,22 @@ cat("\nRandom Forest - opp\n")
 confusionMatrix(pr.rf2, test_data2$play)
 ```
 
-From my limited data, I was able to show a 66% accuracy predicting the play type when WVU had the ball and a 71% accuracy predicting the play type when the opponent had the ball. 
+
+##What The Stats Mean
+From my limited data, I was able to show a 66% accuracy predicting the play type when WVU had the ball and a 71% accuracy predicting the play type when the opponent had the ball. However, that's a little ambitious and pretty generic given that my test set of data only had 6 or 7 plays per team. 
+
+For WVU I was able to predict 4 pass plays correctly but missed 2 rushing plays. In effect, my model predicted all plays to be passing which is a decent approach considering how much WVU passed in this game vs. rushing - but I wouldn't consider that necessarily a "prediction.". 
+
+For Texas I was able to see a little more accuracy and my model correctly predicted the pass play as well as 4 rushing plays. This time the model favors rushing here because Texas ran the ball more than passing. This model predicted 2 rushing plays that were actually pass plays.
+
+##What's Next?
+I think that looking at more games with more plays will provide better results, or at least results that even out. I think I'd like to show more plots with more analysis automatically. 
+
+Two things I really want to do is give the user access to change the team and game and automatically show the same results. The next thing I want to do is some sort of animation - maybe show the number scores animate over time...or, for a really tricky problem (that may not really be anything other than "cool") - animate the position of the ball for the entire game using the yard-line and yards gained per play. 
+
+##Let Me Know!
+If you have a stat that you want to see or something you'd like to know...please email me. I'll do my best to build it in the model. 
+
+Thanks!
+
+jeremy.scott.harris@gmail.com

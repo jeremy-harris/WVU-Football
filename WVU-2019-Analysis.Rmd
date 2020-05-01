@@ -103,7 +103,7 @@ ypa_yards <- ypa %>%
   summarise_each(funs(sum))
 
 #join tables
-ypa_stats <- left_join(ypa_att, ypa_yards)
+ypa_stats <- left_join(ypa_att, ypa_yards, by = "offense")
 
 ypa_stats <- ypa_stats %>%
   mutate(ypa_rate = (yards_gained / n))
@@ -128,7 +128,7 @@ ypa_plot <- ypa_stats %>%
   annotate("text", x = 1.15, y = (sum(ypa_stats$ypa_rate) / 1.25 - 1.15), label = int_opp) +
   annotate("text", x = 1.85, y = (sum(ypa_stats$ypa_rate) / 1.25 - 1.15), label = int_wvu)
 ```
-```{r}
+```{r, echo = FALSE}
 ypa_plot
 ```
 

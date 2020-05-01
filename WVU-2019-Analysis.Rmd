@@ -26,20 +26,23 @@ I'm using this website: https://collegefootballdata.com to gather data for all p
 library(dplyr)
 library(jsonlite)
 library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+
 
 #get data from API 
 data_in <- fromJSON("https://api.collegefootballdata.com/plays?seasonType=regular&year=2019&week=6&team=West%20Virginia")
 
 #set variables for team that WVU is playing -- Week 6 is vs TEXAS
+#I want to pull this information automatically later, for now, I set it manually here. 
 opp <- "Texas"
 opp_score <- "score_TEX"
 ```
 
 
 ##Clean Up Data
-I take the data and drop fields that aren't needed, and rearrange the data into an order that makes sense - then I sort by period then minutes then seconds. Most of my code I dropped from the pdf printout but it available on my github page (http://github.com/jeremy-harris). I left this here to show some of what is taking place behind the scenes. 
-
-```{r}
+The goal of this project is to setup a pipeline of analysis that can be quickly run for any team. To do so, I have to strip out parts of the data that aren't necessary, create a few new variables that are necessary and then code in variables for the visting team so that I can simply change the week to select a different opponent and automatically generate the same document. The RMD file (code) is available on my github page (http://github.com/jeremy-harris).
+```{r, include = FALSE}
 #convert score to be associated with team, not offense/defense
 data_in <- data_in %>%
   mutate(score_WVU = ifelse(offense == "West Virginia", offense_score, defense_score), 
@@ -59,9 +62,77 @@ data_in <- data_in %>%
 ##Visualize The Data
 I create a few different plots here to show things that might be interesting. I don't have tons of granular detail like formations, blitzing, injuries, etc. - but I can show basic game stats which is what I try to do here. 
 
+```{r, echo = FALSE, warning=FALSE}
+#Let's get to one of the most popular stats, yards per attempt
+ypa <- data_in
+
+test <- ypa %>% filter(offense=="West Virginia") %>%
+  mutate(play = ifelse(str_detect(string=play_type, pattern="Rush"), "Rush",
+                       ifelse(str_detect(string=play_type, pattern = "Pass"), "Pass",
+                              ifelse(str_detect(string=play_type, pattern="Sack"), "Pass", "Other")))) %>%
+  filter(play == "Pass")
+
+#strip out interception yardage
+int <- which(ypa$play_type == "Pass Interception Return")
+ypa$yards_gained[int] = 0
+
+#get # of interceptions to display on plot
+int_wvu <- ypa[int,] %>%
+  filter(offense == "West Virginia") %>%
+  tally()
+
+int_opp <- ypa[int,] %>%
+  filter(offense == opp) %>%
+  tally()
+
+#Setup Rush & Pass Plays, Sack included as pass play
+ypa <- ypa %>%
+  mutate(play = ifelse(str_detect(string=play_type, pattern="Rush"), "Rush",
+                       ifelse(str_detect(string=play_type, pattern = "Pass"), "Pass",
+                              ifelse(str_detect(string=play_type, pattern="Sack"), "Pass", "Other")))) %>%
+  filter(play=="Pass") %>%
+  select(c(6,10))
+
+#get number of pass attempts per team  
+ypa_att <- ypa %>%
+  count(offense)
+  
+#get total pass yards per team
+ypa_yards <- ypa %>%
+  group_by(offense) %>%
+  summarise_each(funs(sum))
+
+#join tables
+ypa_stats <- left_join(ypa_att, ypa_yards)
+
+ypa_stats <- ypa_stats %>%
+  mutate(ypa_rate = (yards_gained / n))
+```
+This plot shows the yards per pass attempt. I've included negative sack yards but not interception return yards. The calculation here is the total number of yards gained / every pass attempt (complete, incomplete, interception & sack). This give a great feel for how well the offense can move the ball. Typically, the team with the higher yards per attempt (ypa) rate will win. However, there are equalizers such as interceptions, turnovers, special teams scoring and other similar stats. 
+
 ```{r, include = FALSE}
-library(ggplot2)
-library(gridExtra)
+#setup plot ypa
+ypa_plot <- ypa_stats %>%
+  ggplot(aes(x = offense, y = ypa_rate, fill = offense)) +
+  geom_col() +
+  geom_text(aes(label= round(ypa_rate,2), vjust=-0.25)) +
+  labs(title = "Yards Per Attempt Per Team",
+       subtitle="Includes sack yardage but not int return yardage",
+       x="Team",
+       y="Yards per Pass Attempt",
+       fill="Team") +
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust=0.5)) +
+  scale_fill_manual(values = c("#808080", "#000072")) +
+  ylim(0, sum(ypa_stats$ypa_rate) / 1.25) + 
+  annotate("text", x = 1.5, y = (sum(ypa_stats$ypa_rate) / 1.25 - .15), label = "Interceptions") +
+  annotate("text", x = 1.15, y = (sum(ypa_stats$ypa_rate) / 1.25 - 1.15), label = int_opp) +
+  annotate("text", x = 1.85, y = (sum(ypa_stats$ypa_rate) / 1.25 - 1.15), label = int_wvu)
+```
+```{r}
+ypa_plot
+```
+
+```{r, include = FALSE}
 
 #Let's show play type by yards to go for each team
 distance_data <- data_in %>%
@@ -89,7 +160,6 @@ gg_yards_opp <- distance_data %>% filter(offense == opp) %>%
        x="Distance to Get First Down/Score",
        fill="Play Type")
 ```
-
 ```{r, echo = FALSE}
 plot_yards_wvu <- gg_yards_wvu + theme(plot.margin = unit(c(1,1,0,2), "lines"))
 plot_yards_opp <- gg_yards_opp + theme(plot.margin = unit(c(2,1,1,1), "lines"))
@@ -124,8 +194,6 @@ gg_down <- down_data %>%
 ```{r, echo = FALSE}
 gg_down  
 ```
-
-So, clearly Texas favored the run and WVU favored the pass. Also, since punting and field goals have been removed from this graph - we can see that Texas didn't go for it on 4th down during this game. 
 
 ##Statistical Analysis
 I want to take a look at the probability of a given play type using all variables. As this is a single game, there isn't much data to use in this instance. However, a longer term project can compile data for an entire season (or coaches career, etc.) to show tenancies given the data in the dataset. Again, this can be combined with things like formation type of offense and defense to get an even better insight. 

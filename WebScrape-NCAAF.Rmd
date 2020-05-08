@@ -1,6 +1,7 @@
 ---
 title: "Web Scrape Project - College Football by State"
 author: "Jeremy Harris"
+subtitle: "https://github.com/jeremy-harris/WVU-Football"
 date: "May 06, 2020"
 output:
   html_document: default
@@ -254,7 +255,14 @@ plot_college <- ggplot(qty_town_coll, aes(x=town, y=by_town, fill=college, label
 plot_college
 ```
 
+##Just Want The Data?
 
+```{r, include=FALSE}
+#write to csv file
+write.csv(all_data, "ncaa-data.csv")
+
+```
+You can download the csv file from my GitHub account here: https://github.com/jeremy-harris/WVU-Football/blob/master/ncaa-data.csv.
 
 ##Let Me Know!
 If you have a stat that you want to see or something you'd like to know...please email me. I'll do my best to build it in the model. 

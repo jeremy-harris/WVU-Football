@@ -1,0 +1,433 @@
+---
+title: "Georgia Recruit Analysis"
+author: "Jeremy Harris"
+date: "May 9, 2020"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Georgia Football Recruiting Analysis (Past 10 Years)
+I'm going to take a look at a few excel sheets that have all of the high school commits to college from the state of Georgia for the past 10 years. The goal is to provide the best potential pipeline for WVU to establish that will yield the highest caliber of athlete that will potentially commit to WVU. 
+
+```{r, include = FALSE}
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(readxl)
+library(caret)
+library(OneR)
+library(cluster)
+library(mltools)
+library(jsonlite)
+library(gridExtra)
+library(maps)
+library(ggmap)
+library(mapdata)
+
+#load up the data from the three different tabs in the provided excel file
+orig_data <- read_excel("GA_recruiting_data.xlsx", sheet = 1, na = "0")
+#school_class <- read_excel("GA_recruiting_data.xlsx", sheet = 2)
+#all_conf_data <- read_excel("GA_recruiting_data.xlsx", sheet = 3)
+```
+
+```{r, include = FALSE}
+#tidy up the column names
+recruiting_data <- orig_data
+
+#change all-conf/nfl to factor with 1 an 0
+recruiting_data$`All Conf/NFL` <- sub("X", "1", recruiting_data$`All Conf/NFL`)
+recruiting_data$`All Conf/NFL`[is.na(recruiting_data$`All Conf/NFL`)] <- 0
+
+#rename class & year - they had the same name
+names(recruiting_data)[1] <- "year"
+names(recruiting_data)[6] <- "hs.class"
+
+#make tidy column names and rename columns
+c_names <- colnames(recruiting_data) %>%
+  make.names() 
+colnames(recruiting_data) <- c_names
+
+#remove na from dataset on 247 natl rankings
+recruiting_data$X247.Nat. <- sub("NA", "0", recruiting_data$X247.Nat.) %>%
+  as.numeric()
+
+#create factors for appropriate variables
+c_names2 <- colnames(recruiting_data[c(1,4:9,12,17)])
+recruiting_data[c_names2] <- lapply(recruiting_data[c_names2], factor)
+
+#remove letter form hs.class
+recruiting_data$hs.class <- gsub('.{1}$', '', recruiting_data$hs.class) %>%
+  as.factor()
+
+#add in state of college and in state / out of state factor
+recruiting_data$coll.state <- as.factor(substr(recruiting_data$Signed, 1, 2))
+
+recruiting_data <- recruiting_data %>%
+  mutate(in.state = ifelse((coll.state == "GA"), 1, 0),
+         in.sec = ifelse((Conf. == "SEC"), 1, 0))
+```
+
+##Look At Basic Plots for Inference
+I just want to look at rough plots to get an idea of how this data shapes up before I start my analysis. 
+
+```{r, echo = FALSE}
+#Conferences of commits
+plot(recruiting_data$Conf.)
+
+#hs class of commits
+plot(recruiting_data$hs.class)
+```
+
+##Create "Like" WVU Category
+I want to create a category that contains schools that are "like" WVU. I'll use the data I have with a little outside research to lump schools together in terms of location, conference and then final season rankings. I'll use this new category for the analysis to determine which commits would have been more likely to attend WVU with a statistical probability. From there, I will analyze the detailed information of the commits to find commonality with things such as school size, school location and recruit 247 rating. 
+
+```{r, include = FALSE, warning = FALSE}
+#like_wvu variable will be created by choosing Big 12
+#and states surrounding and including WV
+
+#add id so I can join back data later
+recruiting_data$id <- seq(1:length(recruiting_data$year))
+
+wv_rec <- recruiting_data %>%
+  filter(coll.state == "WV" | coll.state =="PA" | coll.state == "MD" |
+           coll.state == "VA" | coll.state == "KY" | coll.state == "OH" |
+           Conf. == "B12") %>%
+  mutate(like_wvu = 1) %>%
+  as.data.frame()
+
+wv_id <- as.numeric(wv_rec$id)
+
+#join the like_wvu column back to the recruiting data
+recruit_all <- recruiting_data %>%
+  mutate(like_wvu = 0) %>%
+  as.data.frame()
+
+recruit_all[wv_id,]$like_wvu <- 1
+
+#setup new variables as factors
+recruit_all$like_wvu <- as.factor(recruit_all$like_wvu)
+recruit_all$in.state <- as.factor(recruit_all$in.state)
+recruit_all$in.sec <- as.factor(recruit_all$in.sec)
+```
+
+I can see that there are 198 of the 1,223 total commits narrowed down just by selecting the Big 12 and the surrounding states.
+
+##Verify Predictions and Analyze the Variables
+Now I will see how well I can build a model that will predict whether a recruit is likely to go to a like_wvu school. I will analyze the findings to determine what the driving factors are as well as look to narrow down locations of interest for WVU.
+
+```{r, include = FALSE}
+#setup data for predictions by selecting necessary columns
+#I have to also take out any variables that made up the column "like_wvu" or
+#my model will severly overfit
+pred_data <- recruit_all %>%
+  select(-id, -First, -Last, -State, -Conf., -Signed, -coll.state, -in.state, -in.sec, -High.School, -All.Conf.NFL)
+
+col_scale <- c(4,5,7,8,9,10)
+# 
+# test <- pred_data
+# test[,col_scale] <- lapply(test[,col_scale], scale)
+
+
+#setup training/testing data sets with caret
+#setup cross-validation with 10 folds
+fitControl1 <- trainControl(method = "cv", number = 10)
+
+#setup test and train variables
+set.seed(333)
+training1 <- createDataPartition(pred_data$like_wvu, p = .75)$Resample1
+train_data1 <- pred_data[training1,]
+test_data1 <- pred_data[-training1, ]
+
+#setup elasticnet model
+mod1_expandEN = expand.grid(lambda=seq(0.005, .03, .001), alpha=seq(0.1, 1, 0.1))
+set.seed(333)
+mod1.EN <- train(like_wvu ~. + X247.Star*hs.class , data = train_data1, method = "glmnet", trControl = fitControl1, family="binomial",
+                 tuneGrid = mod1_expandEN)
+mod1.EN
+#best results: alpha = .1 & lambda = .03 --> accuracy = 83.8% accuracy
+
+#look at coefficient results
+coef(mod1.EN$finalModel, mod1.EN$bestTune$lambda)
+```
+
+Looking at the raw numbers and verifying with a variable importance output, I can see that the following variables have the highest influence on my results: 
+
+* **HS Size**: We're going to see better results with 4A & 6A. We'll see the worst results with 7A.
+* **Positions**: We'll see the best results with QB, RB, OLB & WR. Worst results with FB & PK.
+* **247 Rating**: Our best star rating is 3 and 5. Worst rating is 4 star.
+
+##More Initial Data Analysis
+I create a few dataframes here to take a look at different variables that might be important. 
+
+```{r, echo = FALSE}
+#predict on my testing set of data
+preds1.EN <- predict(mod1.EN, newdata = test_data1)
+confusionMatrix(data = preds1.EN, reference = test_data1$like_wvu)
+```
+
+##All-Conf / NFL Feature Importance
+I want to gain more insight into the variables that lead to a player becoming an All-Conference or NFL player. There is a lot to take in here that cannot be captured in the data - however, I was able to determine certain attributes that lead to a more likely scenario for success. 
+```{r, include = FALSE}
+# pred_data2 <- recruit_all %>%
+#   select(-id, -First, -Last, -State)
+# 
+# set.seed(333)
+# training1 <- createDataPartition(pred_data2$like_wvu, p = .75)$Resample1
+# train_data1 <- pred_data2[training1,]
+# test_data1 <- pred_data2[-training1, ]
+# 
+# set.seed(333)
+# fit.rf1 <- train(All.Conf.NFL ~., data = train_data1, method="rf", trControl = fitControl1,
+#                  family="binomial")
+# 
+# pr.rf1 <- predict(fit.rf1, test_data1)
+# confusionMatrix(pr.rf1, test_data1$All.Conf.NFL)
+# ```
+# ```{r, echo = FALSE}
+# varImp(fit.rf1)
+```
+
+##Graphically Analyze the "Like WVU" Category
+I want to take the commits that went to the like_wvu category and gain insight into the makup of the 198 observations. In particular, I want to see if we can narrow down a geographic region or other valuable insight for the state of Georgia in terms of focusing our recruiting efforts. 
+
+```{r, include = FALSE}
+###Look at the like_wvu data to narrow down the seach
+wv_data <- wv_rec %>%
+  filter(year == 2016 | year == 2017 | year == 2018 | year == 2019 | year == 2020)
+
+count_schools <- wv_data %>%
+  count(High.School) %>%
+  rename(num_commits = n)
+
+wv_data <- left_join(wv_data, count_schools, by = "High.School") %>%
+  filter(num_commits > 2 | Signed == "WVUN")
+  
+
+#get unique town names
+geo_towns <- wv_data %>%
+  filter(num_commits >1) %>%
+  select(High.School) %>%
+  distinct()
+
+town <- c("Powder Springs", "Fairburn", "Fairburn", "College Park", "Ellenwood",
+          "Suwanee", "Grayson", "Hoschton", "Stone Mountain", "Buford", "Alpharetta",
+          "Richmond Hill")
+towns2 <- c("Powder$20Springs", "Fairburn", "Fairburn", "College%20Park", "Ellenwood",
+          "Suwanee", "Grayson", "Hoschton", "Stone%20Mountain", "Buford", "Alpharetta",
+          "Richmond%20Hill")
+
+geo_towns <- cbind(geo_towns, town)
+
+#pull lat/long information for plotting towns
+latlongs <- NULL
+ll <- NULL
+api_key <- "uCkPDPmacsZIPqhzzHdXsHTZkGSmrbTS"
+for (i in towns2) {
+  latlong_link <- paste0("https://api.tomtom.com/search/2/geocode/",i ,"%2CGA.json?storeResult=false&typeahead=false&limit=1&countrySet=US&key=",api_key)
+
+  js <- fromJSON(latlong_link)
+  lat <- js$results$position$lat
+  lon <- js$results$position$lon
+  
+  ll <- cbind(i, lat,lon)
+  latlongs <- rbind(latlongs, ll)
+  Sys.sleep(1) #wait 1 seconds between requests so I don't time out the server
+}    
+
+all_latlong <- as.data.frame(latlongs) %>%
+  mutate("town" = i) %>%
+  select(-i)
+all_latlong$town <- sub("%20", " ", all_latlong$town)
+all_latlong$lat <- as.numeric(levels(all_latlong$lat))[all_latlong$lat]
+all_latlong$lon <- as.numeric(levels(all_latlong$lon))[all_latlong$lon]
+
+
+#put the lat longs in the dataset
+geo_data <- left_join(geo_towns, all_latlong, by = "town") %>%
+  unique()
+geo_data_p <- as.data.frame(geo_data) #for plotting later
+geo_data <- left_join(wv_data, geo_data, by = "High.School")
+geo_data <- geo_data[complete.cases(geo_data),]
+
+#get lat/long for Atlanta to plot on map
+atl_link <- paste0("https://api.tomtom.com/search/2/geocode/Atlanta%2CGA.json?storeResult=false&typeahead=false&limit=1&countrySet=US&key=",api_key)
+
+  js2 <- fromJSON(atl_link)
+  lat2 <- js2$results$position$lat
+  lon2 <- js2$results$position$lon
+
+  atl_ll <- data.frame("city" = "Atlanta", "lat" = lat2, "lon" = lon2)
+  atl_ll$city <- as.character(atl_ll$city)
+
+
+```
+```{r, include = FALSE}
+#setup plot for Georgia
+us <- map_data("state")
+ga_map <- subset(us, region %in% "georgia")
+
+#setup plot
+ga_plot <- ggplot(ga_map, mapping = aes(x = long, y = lat), group = group) +
+  coord_fixed(1.3) +
+  geom_polygon(color = "black", fill = "gray") +
+  geom_point(data = geo_data, aes(x=lon, y=lat, size = num_commits, color = Conf.)) +
+  geom_text(x = lon2-.3, y= lat2+.2, label = "Atlanta") +
+  labs(title = "Cities in GA with More than 1 Commits in 5 Years",
+       subtitle="To Schools 'Like' WVU",
+       fill="Total",
+       plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust=0.5))
+```
+
+```{r, echo = FALSE, fig.align='center'}
+ga_plot
+
+```
+
+```{r, include = FALSE}
+#count number of commits to a college by town
+qty_town_coll <- geo_data %>%
+  group_by(town, Signed) %>%
+  count(town) %>%
+  rename(by_town = n)
+
+
+#plot college location of commit by town
+plot_college <- ggplot(qty_town_coll, aes(x=town, y=by_town, fill=Signed, label=by_town)) + 
+  geom_bar(stat="identity") +
+  geom_text(size=3, position = position_stack(vjust=0.5)) +
+  labs(title = "Commits By Town Colored by College",
+       subtitle = "Years 2015 - 2020",
+       x="Town",
+       y="Number of Commits",
+       fill="College") +
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust=0.5),
+        axis.text.x = element_text(angle=45, hjust = 1)) +
+  scale_y_continuous(breaks = c(1:50))
+```
+```{r, echo = FALSE, fig.align='center'}
+plot_college
+```
+
+```{r, include = FALSE}
+#count number of commits positions by town
+qty_pos_coll <- geo_data %>%
+  group_by(town, Pos.) %>%
+  count(Pos.) %>%
+  rename(by_pos = n)
+qty_pos_coll$pos  <- as.character(qty_pos_coll$Pos.)
+
+plot_pos <- ggplot(qty_pos_coll, aes(x=town, y=by_pos, fill=pos, label=by_pos)) + 
+  geom_bar(stat="identity") +
+  geom_text(size=3, position = position_stack(vjust=0.5)) +
+  labs(title = "Commits By Town Colored by Position",
+       x="Town",
+       y="Number of Commits",
+       fill="Position") +
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust=0.5),
+        axis.text.x = element_text(angle=45, hjust = 1)) +
+  scale_y_continuous(breaks = c(1:50))
+```
+```{r, echo = FALSE, fig.align='center'}
+plot_pos
+```
+
+
+Another plot showing signed by position
+```{r, include = FALSE}
+#count number of commits positions by town
+qty_pos_signed <- geo_data %>%
+  group_by(Signed, Pos.) %>%
+  count(Pos.) %>%
+  rename(by_pos = n)
+qty_pos_signed$Pos.  <- as.character(qty_pos_signed$Pos.)
+
+plot_pos_signed <- ggplot(qty_pos_signed, aes(x=Signed, y=by_pos, fill=Pos., label=by_pos)) + 
+  geom_bar(stat="identity") +
+  geom_text(size=3, position = position_stack(vjust=0.5)) +
+  labs(title = "Commits Position By Signed Colored by Position",
+       x="College",
+       y="Number of Commits",
+       fill="Position") +
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust=0.5),
+        axis.text.x = element_text(angle=45, hjust = 1)) +
+  scale_y_continuous(breaks = c(1:50))
+```
+```{r, echo = FALSE, fig.align='center'}
+plot_pos_signed
+```
+
+##Plot Showing Trends over Time
+
+```{r, include = FALSE}
+by_time <- geo_data %>%
+  group_by(year) %>%
+  count(year) %>%
+  rename(commits = n) %>%
+  as.data.frame()
+
+plot_by_time <- ggplot(by_time, aes(x=year, y=commits)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Commits to 'Like WVU' by Year",
+       x="Year",
+       y="Number of Commits") +
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust=0.5),
+        axis.text.x = element_text(angle=45, hjust = 1))
+```
+
+```{r, echo = FALSE, fig.align='center'}
+plot_by_time
+```
+
+##Where Did All-Conf / NFL Go?
+
+```{r, include = FALSE}
+#get nfl all-conf players
+nfl <- recruit_all
+nfl$All.Conf.NFL <- as.numeric(levels(nfl$All.Conf.NFL))[nfl$All.Conf.NFL]
+
+#clean up data
+nfl <- nfl %>%
+  filter(All.Conf.NFL == 1) %>%
+  select(-First, -Last, -State)
+
+#count number of times a school produced nfl all-conf player
+nfl_hs <- nfl %>%
+  group_by(High.School) %>%
+  count(High.School) %>% 
+  rename(nfl_ac = n)
+
+#join with 'like-wvu' data
+top_hs <- left_join(geo_data, nfl_hs, by = "High.School")
+top_hs <- top_hs[complete.cases(top_hs),]
+
+#number of commits in the like-wvu data that went all-conf nfl
+top_hs <- top_hs %>%
+  select(High.School, nfl_ac, lat, lon) %>%
+  distinct(High.School, .keep_all = TRUE)
+
+#setup plot
+
+plot_nfl <- ggplot(ga_map, mapping = aes(x = long, y = lat), group = group) +
+  coord_fixed(1.3) +
+  geom_polygon(color = "black", fill = "gray") +
+  geom_point(data = top_hs, aes(x=lon, y=lat, size = nfl_ac, color = High.School)) +
+  geom_text(x = lon2-.3, y= lat2+.2, label = "Atlanta") +
+  labs(title = "Schools That Produced NFL Talent for Like-WVU",
+       fill="High School",
+       plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust=0.5))
+```
+
+##Plot Top High Schools by Players in NFL & All-Conf
+I want to show which players went to "like-WVU" schools that went on to have great succcess. 
+```{r, echo = FALSE, fig.align='center'}
+plot_nfl
+
+```
+
